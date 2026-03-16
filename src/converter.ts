@@ -22,6 +22,7 @@ import type {
 import { getConfig } from './config.js';
 import { applyVisionInterceptor } from './vision.js';
 import { fixToolCallArguments } from './tool-fixer.js';
+import { getVisionProxyFetchOptions } from './proxy-agent.js';
 
 // ==================== 工具指令构建 ====================
 
@@ -847,16 +848,51 @@ function shortId(): string {
 async function preprocessImages(messages: AnthropicMessage[]): Promise<void> {
     if (!messages || messages.length === 0) return;
 
-    // 统计图片数量
+    // 统计图片数量 + URL 图片下载转 base64
     let totalImages = 0;
+    let urlImages = 0;
     for (const msg of messages) {
         if (!Array.isArray(msg.content)) continue;
-        for (const block of msg.content) {
-            if (block.type === 'image') totalImages++;
+        for (let i = 0; i < msg.content.length; i++) {
+            const block = msg.content[i];
+            if (block.type === 'image') {
+                totalImages++;
+                // ★ URL 图片处理：远程 URL 需要下载转为 base64（OCR 和 Vision API 均需要）
+                if (block.source?.type === 'url' && block.source.data && !block.source.data.startsWith('data:')) {
+                    urlImages++;
+                    try {
+                        console.log(`[Converter] 📥 下载远程图片: ${block.source.data.substring(0, 100)}...`);
+                        const response = await fetch(block.source.data, {
+                            ...getVisionProxyFetchOptions(),
+                        } as any);
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const buffer = Buffer.from(await response.arrayBuffer());
+                        const contentType = response.headers.get('content-type') || 'image/jpeg';
+                        const mediaType = contentType.split(';')[0].trim();
+                        const base64Data = buffer.toString('base64');
+                        // 替换为 base64 格式
+                        msg.content[i] = {
+                            ...block,
+                            source: { type: 'base64', media_type: mediaType, data: base64Data },
+                        };
+                        console.log(`[Converter] ✅ 远程图片已转为 base64 (${mediaType}, ${Math.round(base64Data.length * 0.75 / 1024)}KB)`);
+                    } catch (err) {
+                        console.error(`[Converter] ❌ 远程图片下载失败:`, err);
+                        // 下载失败时替换为错误提示文本
+                        msg.content[i] = {
+                            type: 'text',
+                            text: `[Image from URL could not be downloaded: ${(err as Error).message}]`,
+                        } as any;
+                    }
+                }
+            }
         }
     }
 
     if (totalImages === 0) return;
+    if (urlImages > 0) {
+        console.log(`[Converter] 📸 检测到 ${totalImages} 张图片（其中 ${urlImages} 张远程 URL 已转 base64）`);
+    }
 
     console.log(`[Converter] 📸 检测到 ${totalImages} 张图片，启动 vision 预处理...`);
 
