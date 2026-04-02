@@ -6,7 +6,7 @@
   "scripts": {
     "postinstall": "cd stealth-proxy && npm install && npx playwright install chromium",
     "dev": "tsx watch src/index.ts",
-    "dev:stealth": "node stealth-proxy/index.js & STEALTH_PROXY=http://127.0.0.1:3011 tsx watch src/index.ts",
+    "dev:stealth": "sh dev-stealth.sh",
     "build": "tsc",
     "start": "node dist/index.js",
     "test:handler-truncation": "node test/unit-handler-truncation.mjs",
